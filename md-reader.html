@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MD Reader</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1c1e21; --muted: #6a7077; --bar: #f4f4f5;
+    --border: #d9d9de; --accent: #2563eb; --code-bg: #f3f3f5;
+    --btn-active: #1c1e21; --btn-active-fg: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b1d20; --fg: #e8e9ea; --muted: #9aa0a6; --bar: #24262a;
+      --border: #3a3d42; --accent: #6ea8ff; --code-bg: #26282c;
+      --btn-active: #e8e9ea; --btn-active-fg: #1b1d20;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--fg); display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 12px; background: var(--bar); border-bottom: 1px solid var(--border);
+  }
+  header .group { display: flex; align-items: center; gap: 6px; }
+  header .spacer { flex: 1; }
+  button {
+    font: inherit; font-size: 13px; padding: 5px 11px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--fg); border-radius: 6px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button:disabled { opacity: .45; cursor: default; }
+  .segmented { display: flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .segmented button { border: 0; border-radius: 0; }
+  .segmented button + button { border-left: 1px solid var(--border); }
+  .segmented button.active { background: var(--btn-active); color: var(--btn-active-fg); }
+  #filename {
+    font: inherit; font-size: 13px; font-weight: 600; padding: 5px 8px; min-width: 140px;
+    border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--fg);
+  }
+  #filename:hover, #filename:focus { border-color: var(--border); background: var(--bg); outline: none; }
+  #dirty { color: #d97706; font-size: 15px; width: 10px; visibility: hidden; }
+  #status { font-size: 12px; color: var(--muted); }
+  #counts { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #editor {
+    flex: 1; min-width: 0; resize: none; border: 0; outline: none; padding: 18px 20px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 14px; line-height: 1.55; background: var(--bg); color: var(--fg);
+  }
+  #previewWrap { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 26px; }
+  main.view-formatted #editor { display: none; }
+  main.view-raw #previewWrap { display: none; }
+  main.view-split #editor { border-right: 1px solid var(--border); }
+  /* rendered markdown */
+  .md { max-width: 760px; margin: 0 auto; line-height: 1.65; font-size: 15px; word-wrap: break-word; }
+  .md h1, .md h2 { border-bottom: 1px solid var(--border); padding-bottom: .25em; }
+  .md h1 { font-size: 1.7em; } .md h2 { font-size: 1.4em; } .md h3 { font-size: 1.17em; }
+  .md a { color: var(--accent); }
+  .md code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em;
+    background: var(--code-bg); padding: .15em .35em; border-radius: 4px;
+  }
+  .md pre { background: var(--code-bg); padding: 12px 14px; border-radius: 8px; overflow-x: auto; }
+  .md pre code { background: none; padding: 0; }
+  .md blockquote { margin: 0; padding: 0 14px; border-left: 4px solid var(--border); color: var(--muted); }
+  .md table { border-collapse: collapse; margin: 12px 0; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid var(--border); padding: 6px 11px; }
+  .md th { background: var(--bar); }
+  .md img { max-width: 100%; }
+  .md hr { border: 0; border-top: 1px solid var(--border); margin: 20px 0; }
+  .md input[type="checkbox"] { margin-right: 6px; }
+  #dropHint {
+    position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(37, 99, 235, .12); border: 3px dashed var(--accent);
+    font-size: 18px; font-weight: 600; z-index: 10; pointer-events: none;
+  }
+  @media print {
+    header { display: none !important; }
+    #editor { display: none !important; }
+    #previewWrap { display: block !important; overflow: visible; padding: 0; }
+    main { display: block; }
+    .md { max-width: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="group">
+    <button id="btnNew" title="New document">New</button>
+    <button id="btnOpen" title="Open a .md file">Open…</button>
+    <button id="btnSave" title="Save (⌘/Ctrl+S)">Save</button>
+    <button id="btnSaveAs" title="Save as a new file">Save As…</button>
+    <input type="file" id="fileInput" accept=".md,.markdown,.mdown,.mkd,.txt,text/markdown" hidden>
+  </div>
+  <div class="group">
+    <span id="dirty" title="Unsaved changes">●</span>
+    <input id="filename" value="Untitled.md" spellcheck="false" aria-label="File name">
+  </div>
+  <div class="spacer"></div>
+  <span id="status"></span>
+  <div class="segmented" role="group" aria-label="View">
+    <button data-view="formatted" class="active">Formatted</button>
+    <button data-view="split">Split</button>
+    <button data-view="raw">Raw</button>
+  </div>
+  <span id="counts"></span>
+</header>
+<main id="main" class="view-formatted">
+  <textarea id="editor" spellcheck="false" aria-label="Markdown source"></textarea>
+  <div id="previewWrap"><div id="preview" class="md"></div></div>
+</main>
+<div id="dropHint">Drop a .md file to open it</div>
+<script>
+// === MD RENDERER START ===
+// Compact Markdown -> HTML renderer. Pure functions, no DOM access.
+// Raw HTML in the source is always escaped.
+function mdEscapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Inline formatting for one text fragment (no block structure).
+function mdInline(text) {
+  // Protect code spans first: their contents are literal.
+  var parts = text.split(/(`+)([\s\S]*?)\1/);
+  var out = '';
+  for (var i = 0; i < parts.length; i += 3) {
+    out += mdInlineText(parts[i]);
+    if (i + 2 < parts.length) {
+      var code = parts[i + 2].replace(/^ ([\s\S]*) $/, '$1');
+      out += '<code>' + mdEscapeHtml(code) + '</code>';
+    }
+  }
+  return out;
+}
+
+function mdInlineText(text) {
+  var s = mdEscapeHtml(text);
+  // Images, then links. URLs may not contain spaces or ')'.
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;([^&]*)&quot;)?\)/g,
+    function (m, alt, url, title) {
+      return '<img src="' + url + '" alt="' + alt + '"' +
+        (title ? ' title="' + title + '"' : '') + '>';
+    });
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;([^&]*)&quot;)?\)/g,
+    function (m, label, url, title) {
+      return '<a href="' + url + '"' + (title ? ' title="' + title + '"' : '') + '>' + label + '</a>';
+    });
+  // Bold, strikethrough, italic. Bold first so ** wins over *.
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  s = s.replace(/(^|[\s(])_([^_]+)_(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
+  return s;
+}
+
+function mdIsHr(line) { return /^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(line); }
+
+function mdListItem(line) {
+  var m = line.match(/^(\s*)([-*+]|\d{1,9}[.)])\s+([\s\S]*)$/);
+  if (!m) return null;
+  var indent = m[1].replace(/\t/g, '    ').length;
+  var ordered = /\d/.test(m[2][0]);
+  var content = m[3];
+  var task = null;
+  var tm = content.match(/^\[([ xX])\]\s+([\s\S]*)$/);
+  if (tm) { task = tm[1].toLowerCase() === 'x'; content = tm[2]; }
+  return { indent: indent, ordered: ordered, content: content, task: task };
+}
+
+// Render a run of consecutive list lines (with indent-based nesting).
+function mdRenderList(lines) {
+  var items = lines.map(mdListItem);
+  var pos = 0;
+  function parseLevel(indent) {
+    var ordered = items[pos].ordered;
+    var tag = ordered ? 'ol' : 'ul';
+    var html = '<' + tag + '>';
+    while (pos < items.length) {
+      var it = items[pos];
+      if (it.indent < indent || it.ordered !== ordered) break;
+      if (it.indent > indent) { // nested list inside previous <li>
+        html = html.replace(/<\/li>$/, '') + parseLevel(it.indent) + '</li>';
+        continue;
+      }
+      pos++;
+      var box = it.task === null ? '' :
+        '<input type="checkbox" disabled' + (it.task ? ' checked' : '') + '> ';
+      html += '<li>' + box + mdInline(it.content) + '</li>';
+    }
+    return html + '</' + tag + '>';
+  }
+  var out = '';
+  while (pos < items.length) out += parseLevel(items[pos].indent);
+  return out;
+}
+
+function mdSplitTableRow(line) {
+  var s = line.trim();
+  if (s[0] === '|') s = s.slice(1);
+  if (s[s.length - 1] === '|') s = s.slice(0, -1);
+  return s.split('|').map(function (c) { return c.trim(); });
+}
+
+function mdIsTableSep(line) {
+  return /^\s*\|?[\s:|-]+\|?\s*$/.test(line) && line.indexOf('-') !== -1;
+}
+
+function renderMarkdown(src) {
+  var lines = String(src).replace(/\r\n?/g, '\n').split('\n');
+  var html = '';
+  var i = 0;
+  while (i < lines.length) {
+    var line = lines[i];
+
+    // Fenced code block
+    var fence = line.match(/^\s{0,3}(```+|~~~+)\s*([\w-]*)\s*$/);
+    if (fence) {
+      var marker = fence[1][0], buf = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith(marker.repeat(3))) { buf.push(lines[i]); i++; }
+      i++; // closing fence
+      html += '<pre><code' + (fence[2] ? ' class="language-' + fence[2] + '"' : '') + '>' +
+        mdEscapeHtml(buf.join('\n')) + '\n</code></pre>';
+      continue;
+    }
+    // Blank line
+    if (/^\s*$/.test(line)) { i++; continue; }
+    // Heading
+    var h = line.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/);
+    if (h) { html += '<h' + h[1].length + '>' + mdInline(h[2]) + '</h' + h[1].length + '>'; i++; continue; }
+    // Horizontal rule
+    if (mdIsHr(line)) { html += '<hr>'; i++; continue; }
+    // Blockquote: strip '>' and render the inside recursively
+    if (/^\s{0,3}>/.test(line)) {
+      var quote = [];
+      while (i < lines.length && /^\s{0,3}>/.test(lines[i])) {
+        quote.push(lines[i].replace(/^\s{0,3}>\s?/, '')); i++;
+      }
+      html += '<blockquote>' + renderMarkdown(quote.join('\n')) + '</blockquote>';
+      continue;
+    }
+    // Table: header row followed by a separator row
+    if (line.indexOf('|') !== -1 && i + 1 < lines.length && mdIsTableSep(lines[i + 1])) {
+      var head = mdSplitTableRow(line);
+      i += 2;
+      html += '<table><thead><tr>' + head.map(function (c) {
+        return '<th>' + mdInline(c) + '</th>';
+      }).join('') + '</tr></thead><tbody>';
+      while (i < lines.length && lines[i].indexOf('|') !== -1 && !/^\s*$/.test(lines[i])) {
+        var cells = mdSplitTableRow(lines[i]); i++;
+        html += '<tr>' + cells.map(function (c) {
+          return '<td>' + mdInline(c) + '</td>';
+        }).join('') + '</tr>';
+      }
+      html += '</tbody></table>';
+      continue;
+    }
+    // List
+    if (mdListItem(line)) {
+      var run = [];
+      while (i < lines.length && mdListItem(lines[i])) { run.push(lines[i]); i++; }
+      html += mdRenderList(run);
+      continue;
+    }
+    // Paragraph: gather until a blank line or another block starts
+    var para = [line]; i++;
+    while (i < lines.length && !/^\s*$/.test(lines[i]) &&
+           !mdListItem(lines[i]) && !/^\s{0,3}(#{1,6}\s|>|```|~~~)/.test(lines[i]) &&
+           !mdIsHr(lines[i])) {
+      para.push(lines[i]); i++;
+    }
+    html += '<p>' + mdInline(para.join('\n')).replace(/\n/g, '<br>') + '</p>';
+  }
+  return html;
+}
+// === MD RENDERER END ===
+</script>
+<script>
+(function () {
+  var editor = document.getElementById('editor');
+  var preview = document.getElementById('preview');
+  var main = document.getElementById('main');
+  var filenameEl = document.getElementById('filename');
+  var dirtyEl = document.getElementById('dirty');
+  var statusEl = document.getElementById('status');
+  var countsEl = document.getElementById('counts');
+  var fileInput = document.getElementById('fileInput');
+
+  var fileHandle = null;   // FileSystemFileHandle (Chrome/Edge) for write-back
+  var bridge = null;       // {token} when served by md-server.py; file fixed server-side
+  var bridgeNoFile = false;
+  var dirty = false;
+  var saveTimer = null;
+
+  var STARTER = '# Welcome to MD Reader\n\n' +
+    'Open a **.md file** (or drop one anywhere on this window) to read and edit it.\n\n' +
+    '- **Formatted** view renders the markdown\n' +
+    '- **Raw** view edits the plain text\n' +
+    '- **Split** shows both at once\n\n' +
+    '> Tip: press Cmd/Ctrl+S to save back to the same file.\n';
+
+  function setStatus(msg) { statusEl.textContent = msg; }
+
+  function setDirty(d) {
+    dirty = d;
+    dirtyEl.style.visibility = d ? 'visible' : 'hidden';
+  }
+
+  function refresh() {
+    preview.innerHTML = renderMarkdown(editor.value);
+    var words = editor.value.trim() ? editor.value.trim().split(/\s+/).length : 0;
+    countsEl.textContent = words + ' words · ' + editor.value.length + ' chars';
+    document.title = (dirty ? '● ' : '') + filenameEl.value + ' — MD Reader';
+  }
+
+  function scheduleAutosave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(function () {
+      try {
+        localStorage.setItem('mdreader-draft', JSON.stringify({
+          name: filenameEl.value, text: editor.value, ts: Date.now()
+        }));
+      } catch (e) { /* storage full/unavailable: ignore */ }
+    }, 400);
+  }
+
+  editor.addEventListener('input', function () { setDirty(true); refresh(); scheduleAutosave(); });
+  filenameEl.addEventListener('input', function () { refresh(); scheduleAutosave(); });
+
+  function loadText(name, text, handle) {
+    filenameEl.value = name || 'Untitled.md';
+    editor.value = text;
+    fileHandle = handle || null;
+    setDirty(false);
+    refresh(); scheduleAutosave();
+    setStatus(handle || bridge ? 'Loaded ' + filenameEl.value : 'Loaded (Save will ask where)');
+    if (main.className === 'view-formatted') editor.focus();
+  }
+
+  // ---- View switching ------------------------------------------------------
+  document.querySelectorAll('.segmented button').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.segmented button').forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      main.className = 'view-' + btn.dataset.view;
+      if (btn.dataset.view !== 'formatted') editor.focus();
+      refresh();
+    });
+  });
+
+  // ---- Opening files -------------------------------------------------------
+  var MD_TYPES = [{
+    description: 'Markdown files',
+    accept: { 'text/markdown': ['.md', '.markdown', '.mdown', '.mkd', '.txt'] }
+  }];
+
+  async function openViaPicker() {
+    try {
+      var handles = await window.showOpenFilePicker({ types: MD_TYPES, multiple: false });
+      var handle = handles[0];
+      var file = await handle.getFile();
+      loadText(file.name, await file.text(), handle);
+    } catch (e) { if (e.name !== 'AbortError') setStatus('Open failed: ' + e.message); }
+  }
+
+  document.getElementById('btnOpen').addEventListener('click', function () {
+    if (window.showOpenFilePicker) openViaPicker(); else fileInput.click();
+  });
+  fileInput.addEventListener('change', function () {
+    var f = fileInput.files[0];
+    if (f) f.text().then(function (t) { loadText(f.name, t, null); });
+    fileInput.value = '';
+  });
+
+  // Drag & drop anywhere
+  var dropHint = document.getElementById('dropHint');
+  window.addEventListener('dragover', function (e) { e.preventDefault(); dropHint.style.display = 'flex'; });
+  window.addEventListener('dragleave', function (e) { if (!e.relatedTarget) dropHint.style.display = 'none'; });
+  window.addEventListener('drop', function (e) {
+    e.preventDefault(); dropHint.style.display = 'none';
+    var f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+    if (e.dataTransfer.items && e.dataTransfer.items[0].getAsFileSystemHandle) {
+      e.dataTransfer.items[0].getAsFileSystemHandle().then(function (h) {
+        if (h && h.kind === 'file') { fileHandle = h; }
+        f.text().then(function (t) { loadText(f.name, t, fileHandle); });
+      }).catch(function () { f.text().then(function (t) { loadText(f.name, t, null); }); });
+    } else {
+      f.text().then(function (t) { loadText(f.name, t, null); });
+    }
+  });
+
+  // ---- Saving ---------------------------------------------------------------
+  function downloadSave() {
+    var blob = new Blob([editor.value], { type: 'text/markdown' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filenameEl.value || 'Untitled.md';
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+    setDirty(false); refresh();
+    setStatus('Downloaded ' + a.download + ' (browser can\'t write in place here)');
+  }
+
+  async function saveViaHandle(handle) {
+    var writable = await handle.createWritable();
+    await writable.write(editor.value);
+    await writable.close();
+    setDirty(false); refresh();
+    setStatus('Saved ' + filenameEl.value);
+  }
+
+  async function saveAs() {
+    if (bridge && !bridgeNoFile) { save(); return; }
+    if (window.showSaveFilePicker) {
+      try {
+        var handle = await window.showSaveFilePicker({
+          types: MD_TYPES, suggestedName: filenameEl.value || 'Untitled.md'
+        });
+        filenameEl.value = handle.name;
+        await saveViaHandle(handle);
+        fileHandle = handle;
+      } catch (e) { if (e.name !== 'AbortError') setStatus('Save failed: ' + e.message); }
+    } else {
+      downloadSave();
+    }
+  }
+
+  async function save() {
+    if (bridge) {
+      if (bridgeNoFile) { saveAs(); return; }
+      try {
+        var r = await fetch('api/save?t=' + encodeURIComponent(bridge.token), {
+          method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body: editor.value
+        });
+        if (!r.ok) throw new Error('server said ' + r.status);
+        setDirty(false); refresh();
+        setStatus('Saved ' + filenameEl.value);
+      } catch (e) { setStatus('Save failed: ' + e.message); }
+      return;
+    }
+    if (fileHandle) {
+      try { await saveViaHandle(fileHandle); }
+      catch (e) { setStatus('Save failed: ' + e.message); }
+      return;
+    }
+    saveAs();
+  }
+
+  document.getElementById('btnSave').addEventListener('click', save);
+  document.getElementById('btnSaveAs').addEventListener('click', saveAs);
+  document.getElementById('btnNew').addEventListener('click', function () {
+    if (dirty && !confirm('Discard unsaved changes and start a new document?')) return;
+    loadText('Untitled.md', '', null);
+    if (bridge) bridgeNoFile = true;
+    setStatus('New document');
+  });
+
+  window.addEventListener('keydown', function (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); save(); }
+  });
+  window.addEventListener('beforeunload', function (e) { if (dirty) e.preventDefault(); });
+
+  // ---- Bridge mode (served by md-server.py) --------------------------------
+  async function initBridge() {
+    var token = new URLSearchParams(location.search).get('t');
+    if (!token || !/^https?:$/.test(location.protocol)) return false;
+    try {
+      var r = await fetch('api/info?t=' + encodeURIComponent(token));
+      if (!r.ok) return false;
+      var info = await r.json();
+      bridge = { token: token };
+      bridgeNoFile = !!info.no_file;
+      var c = await fetch('api/content?t=' + encodeURIComponent(token));
+      var text = await c.text();
+      loadText(info.name, text, null);
+      setStatus(info.no_file ? 'New document (Save will ask where)' :
+        'Editing ' + info.path + ' — Save writes straight back');
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // ---- Startup ---------------------------------------------------------------
+  (async function () {
+    if (await initBridge()) return;
+    var restored = false;
+    try {
+      var draft = JSON.parse(localStorage.getItem('mdreader-draft') || 'null');
+      if (draft && draft.text) {
+        loadText(draft.name || 'Untitled.md', draft.text, null);
+        setDirty(true);
+        setStatus('Restored your last draft (unsaved)');
+        restored = true;
+      }
+    } catch (e) { /* ignore */ }
+    if (!restored) { loadText('Untitled.md', STARTER, null); setStatus('Drop a .md file here, or click Open'); }
+  })();
+})();
+</script>
+</body>
+</html>
